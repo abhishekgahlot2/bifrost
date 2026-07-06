@@ -56,9 +56,6 @@ func NewSweeper(store SweepStore, pricing PricingManager, fetcher BatchResultFet
 	if config.Limit <= 0 {
 		config.Limit = defaultSweepLimit
 	}
-	if config.Provider == "" {
-		config.Provider = schemas.OpenAI
-	}
 	if config.ClaimedBy == "" {
 		config.ClaimedBy = "batch-sweeper"
 	}
@@ -107,7 +104,7 @@ func (s *Sweeper) SweepOnce(ctx context.Context) {
 }
 
 func (s *Sweeper) sweepJob(ctx context.Context, job *logstore.BatchJob, now time.Time) {
-	if job == nil || schemas.ModelProvider(job.Provider) != schemas.OpenAI {
+	if job == nil || !IsProviderSupported(schemas.ModelProvider(job.Provider)) {
 		return
 	}
 	locked, err := s.acquireProviderPollLease(job)
@@ -133,7 +130,7 @@ func (s *Sweeper) sweepJob(ctx context.Context, job *logstore.BatchJob, now time
 		s.warn("batch accounting sweeper failed to upsert retrieved batch provider=%s batch_id=%s job_id=%s: %v", latest.Provider, latest.BatchID, latest.ID, err)
 		return
 	}
-	if retrieved.Status != schemas.BatchStatusCompleted {
+	if retrieved.Status != schemas.BatchStatusCompleted && retrieved.Status != schemas.BatchStatusEnded {
 		if isTerminalStatus(retrieved.Status) {
 			s.markTerminalWithoutResults(ctx, latest)
 			return
@@ -152,11 +149,17 @@ func (s *Sweeper) sweepJob(ctx context.Context, job *logstore.BatchJob, now time
 		s.reschedule(ctx, latest, now)
 		return
 	}
+	endpoint := schemas.BatchEndpoint(latest.Endpoint)
+	if results.Endpoint != "" {
+		endpoint = results.Endpoint
+	}
 	if _, err := AccountBatchResults(ctx, s.store, s.pricing, Request{
 		Provider:      schemas.ModelProvider(latest.Provider),
 		BatchID:       latest.BatchID,
 		FallbackModel: latest.Model,
+		Endpoint:      endpoint,
 		Results:       results.Results,
+		ParseErrors:   results.ExtraFields.ParseErrors,
 		RequestCounts: &retrieved.RequestCounts,
 		BatchJob:      latest,
 		Emitter:       s.emitter,
@@ -173,13 +176,16 @@ func (s *Sweeper) reschedule(ctx context.Context, job *logstore.BatchJob, now ti
 	job.PollAttempts++
 	if job.PollAttempts >= maxPollAttempts {
 		s.markTerminalAsUnpriceable(ctx, job, UnpriceableReasonMaxPollAttempts)
+		s.deletePollLease(job)
 		return
 	}
 	next := s.nextCheckAt(job, now)
 	job.NextCheckAt = &next
 	if err := s.store.UpsertBatchJob(ctx, job); err != nil {
 		s.warn("batch accounting sweeper failed to reschedule provider=%s batch_id=%s job_id=%s: %v", job.Provider, job.BatchID, job.ID, err)
+		return
 	}
+	s.deletePollLease(job)
 }
 
 func (s *Sweeper) markTerminalAsUnpriceable(ctx context.Context, job *logstore.BatchJob, reason string) {
@@ -193,6 +199,7 @@ func (s *Sweeper) markTerminalAsUnpriceable(ctx context.Context, job *logstore.B
 	if err := s.store.MarkBatchJobUnpriceable(ctx, job.ID, token, reason, nil); err != nil {
 		s.warn("batch accounting sweeper failed to mark unpriceable batch provider=%s batch_id=%s job_id=%s reason=%s: %v", job.Provider, job.BatchID, job.ID, reason, err)
 	}
+	s.deletePollLease(job)
 }
 
 func (s *Sweeper) markTerminalWithoutResults(ctx context.Context, job *logstore.BatchJob) {
@@ -203,6 +210,9 @@ func batchJobFromRetrieve(existing *logstore.BatchJob, retrieved *schemas.Bifros
 	job := *existing
 	job.BatchID = retrieved.ID
 	job.ProviderStatus = string(retrieved.Status)
+	if retrieved.Endpoint != "" {
+		job.Endpoint = retrieved.Endpoint
+	}
 	job.InputFileID = retrieved.InputFileID
 	job.OutputFileID = retrieved.OutputFileID
 	job.ErrorFileID = retrieved.ErrorFileID
@@ -237,6 +247,16 @@ func (s *Sweeper) acquireProviderPollLease(job *logstore.BatchJob) (bool, error)
 		"job_id":     job.ID,
 	}
 	return s.config.KVStore.SetNXWithTTL(key, value, s.config.KVLeaseTTL)
+}
+
+func (s *Sweeper) deletePollLease(job *logstore.BatchJob) {
+	if s.config.KVStore == nil {
+		return
+	}
+	key := fmt.Sprintf("batch-accounting:poll:%s:%s", job.Provider, job.BatchID)
+	if _, err := s.config.KVStore.Delete(key); err != nil {
+		s.warn("batch accounting sweeper failed to release poll lease provider=%s batch_id=%s job_id=%s: %v", job.Provider, job.BatchID, job.ID, err)
+	}
 }
 
 func (s *Sweeper) nextCheckAt(job *logstore.BatchJob, now time.Time) time.Time {

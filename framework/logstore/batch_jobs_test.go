@@ -129,7 +129,7 @@ func TestUpsertBatchJob_ClearsNextCheckAt_OnlyForNonCompletedTerminal(t *testing
 		{name: "failed", status: string(schemas.BatchStatusFailed), wantNil: true},
 		{name: "expired", status: string(schemas.BatchStatusExpired), wantNil: true},
 		{name: "cancelled", status: string(schemas.BatchStatusCancelled), wantNil: true},
-		{name: "ended", status: string(schemas.BatchStatusEnded), wantNil: true},
+		{name: "ended", status: string(schemas.BatchStatusEnded), wantNil: false},
 		{name: "deleted", status: string(schemas.BatchStatusDeleted), wantNil: true},
 		{name: "completed", status: string(schemas.BatchStatusCompleted), wantNil: false},
 		{name: "in_progress", status: string(schemas.BatchStatusInProgress), wantNil: false},

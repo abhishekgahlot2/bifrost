@@ -449,6 +449,9 @@ func (s *RDBLogStore) UpsertBatchJob(ctx context.Context, job *BatchJob) error {
 	if job.Model != "" {
 		updates["model"] = job.Model
 	}
+	if job.Endpoint != "" {
+		updates["endpoint"] = job.Endpoint
+	}
 	if job.ProviderStatus != "" {
 		updates["provider_status"] = job.ProviderStatus
 	}
@@ -470,7 +473,9 @@ func (s *RDBLogStore) UpsertBatchJob(ctx context.Context, job *BatchJob) error {
 	if job.PollAttempts > 0 {
 		updates["poll_attempts"] = job.PollAttempts
 	}
-	if IsTerminalBatchProviderStatus(job.ProviderStatus) && job.ProviderStatus != string(schemas.BatchStatusCompleted) {
+	if IsTerminalBatchProviderStatus(job.ProviderStatus) &&
+		job.ProviderStatus != string(schemas.BatchStatusCompleted) &&
+		job.ProviderStatus != string(schemas.BatchStatusEnded) {
 		updates["next_check_at"] = nil
 	}
 
