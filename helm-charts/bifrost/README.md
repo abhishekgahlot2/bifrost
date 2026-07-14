@@ -4,9 +4,13 @@
 
 Official Helm charts for deploying [Bifrost](https://github.com/maximhq/bifrost) - a high-performance AI gateway with unified interface for multiple providers.
 
-**Latest Version:** 2.1.27
+**Latest Version:** 2.1.28
 
 ## Changelog
+
+### 2.1.28
+
+- Added generic OIDC SCIM/SSO provider support (`bifrost.scim.provider: generic`) for any standards-compliant OIDC IdP. Configure via `bifrost.scim.config` (`issuerUrl` and `clientId` required; optional `clientSecret`, `audience`, endpoint overrides, `teamIdsField`, `rolesField`, `scopes`, and attribute/claim mappings). Endpoints are resolved via OIDC discovery unless overridden. Renders into `scim_config.config`.
 
 ### 2.1.27
 
